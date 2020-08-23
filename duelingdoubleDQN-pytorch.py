@@ -1,4 +1,3 @@
-import os
 import numpy as np
 import torch as T
 from torch import nn
@@ -14,11 +13,9 @@ class DuelingDDQN(nn.Module):
         self.fc1 = nn.Linear(input_dims, 512)
         self.V = nn.Linear(512, 1)
         self.A = nn.Linear(512, n_actions)
-
         self.optimizer = optim.Adam(self.parameters(), lr=lr)
         self.loss = nn.MSELoss()
-        self.device = T.device('cuda:0' if T.cuda.is_available() else 'cpu')
-        self.to(self.device)
+        self.cuda()
 
     def forward(self, state):
         flat1 = F.relu(self.fc1(state))
@@ -52,7 +49,7 @@ class Agent():
 
     def choose_action(self, observation):
         if np.random.random() > self.epsilon:
-            state = T.tensor([observation],dtype=T.float).to(self.q_eval.device)
+            state = T.tensor([observation],dtype=T.float).cuda()
             _, advantage = self.q_eval.forward(state)
             action = T.argmax(advantage).item()
         else:
@@ -82,11 +79,11 @@ class Agent():
         batch = random.sample(self.memory, self.batch_size)
         state, action, reward, new_state, done = [x[0] for x in batch], [x[1] for x in batch], [x[2] for x in batch], [x[3] for x in batch], [x[4] for x in batch]
 
-        states = T.tensor(state).to(self.q_eval.device)
-        rewards = T.tensor(reward).to(self.q_eval.device)
-        dones = T.tensor(done).to(self.q_eval.device)
-        actions = T.tensor(action).to(self.q_eval.device)
-        states_ = T.tensor(new_state).to(self.q_eval.device)
+        states = T.tensor(state).cuda()
+        rewards = T.tensor(reward).cuda()
+        dones = T.tensor(done).cuda()
+        actions = T.tensor(action).cuda()
+        states_ = T.tensor(new_state).cuda()
 
         indices = np.arange(self.batch_size)
 
@@ -107,7 +104,7 @@ class Agent():
         q_next[dones] = 0.0
         q_target = rewards + self.gamma*q_next[indices, max_actions]
 
-        loss = self.q_eval.loss(q_target, q_pred).to(self.q_eval.device)
+        loss = self.q_eval.loss(q_target, q_pred).cuda()
         loss.backward()
         self.q_eval.optimizer.step()
         self.learn_step_counter += 1
