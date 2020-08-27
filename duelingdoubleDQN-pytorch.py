@@ -1,5 +1,5 @@
 import numpy as np
-import torch as T
+import torch as torch
 from torch import nn
 import torch.nn.functional as F
 from torch import optim
@@ -7,13 +7,14 @@ import gym
 from collections import deque
 import random
 
-class DuelingDDQN(nn.Module):
-    def __init__(self, lr, n_actions, input_dims):
-        super(DuelingDDQN, self).__init__()
+
+class DQN(nn.Module):
+    def __init__(self, input_dims, n_actions):
+        super(DQN, self).__init__()
         self.fc1 = nn.Linear(input_dims, 512)
         self.V = nn.Linear(512, 1)
         self.A = nn.Linear(512, n_actions)
-        self.optimizer = optim.Adam(self.parameters(), lr=lr)
+        self.optimizer = optim.Adam(self.parameters())
         self.loss = nn.MSELoss()
         self.cuda()
 
@@ -23,51 +24,42 @@ class DuelingDDQN(nn.Module):
         A = self.A(flat1)
         return V, A
 
-class Agent():
-    def __init__(self, gamma, epsilon, lr, n_actions, input_dims,
-                 mem_size, batch_size, eps_min=0.01, eps_dec=5e-7,
-                 replace=1000):
-        self.gamma = gamma
-        self.epsilon = epsilon
-        self.lr = lr
+
+class Agent:
+    def __init__(self, input_dims, n_actions):
+        self.gamma = 0.99
+        self.epsilon = 1
         self.n_actions = n_actions
         self.input_dims = input_dims
-        self.batch_size = batch_size
-        self.eps_min = eps_min
-        self.eps_dec = eps_dec
-        self.replace_target_cnt = replace
+        self.batch_size = 64
+        self.eps_min = 0.01
+        self.eps_dec = 5e-5
+        self.replace_target_net_int = 10
         self.action_space = [i for i in range(self.n_actions)]
         self.learn_step_counter = 0
+        self.max_size = 100000
+        self.memory = deque(maxlen=self.max_size)
+        self.q_eval = DQN(self.input_dims, self.n_actions)
+        self.q_next = DQN(self.input_dims, self.n_actions)
 
-        self.memory = deque(maxlen=mem_size)
-
-        self.q_eval = DuelingDDQN(self.lr, self.n_actions,
-                                   input_dims=self.input_dims,)
-
-        self.q_next = DuelingDDQN(self.lr, self.n_actions,
-                                   input_dims=self.input_dims)
-
-    def choose_action(self, observation):
+    def choose_action(self, obs):
         if np.random.random() > self.epsilon:
-            state = T.tensor([observation],dtype=T.float).cuda()
+            state = torch.tensor([obs], dtype=torch.float).cuda()
             _, advantage = self.q_eval.forward(state)
-            action = T.argmax(advantage).item()
+            action = torch.argmax(advantage).item()
         else:
             action = np.random.choice(self.action_space)
-
         return action
 
     def store_transition(self, state, action, reward, state_, done):
         self.memory.append((state, action, reward, state_, done))
 
     def replace_target_network(self):
-        if self.learn_step_counter % self.replace_target_cnt == 0:
+        if not self.learn_step_counter % self.replace_target_net_int:
             self.q_next.load_state_dict(self.q_eval.state_dict())
 
     def decrement_epsilon(self):
-        self.epsilon = self.epsilon - self.eps_dec \
-                        if self.epsilon > self.eps_min else self.eps_min
-
+        self.epsilon = self.epsilon - self.eps_dec if self.epsilon > self.eps_min else self.eps_min
 
     def learn(self):
         if len(self.memory) < self.batch_size:
@@ -77,69 +69,58 @@ class Agent():
 
         self.replace_target_network()
         batch = random.sample(self.memory, self.batch_size)
-        state, action, reward, new_state, done = [x[0] for x in batch], [x[1] for x in batch], [x[2] for x in batch], [x[3] for x in batch], [x[4] for x in batch]
+        state, action, reward, new_state, done = [x[0] for x in batch], [x[1] for x in batch], [x[2] for x in batch], [
+            x[3] for x in batch], [x[4] for x in batch]
 
-        states = T.tensor(state).cuda()
-        rewards = T.tensor(reward).cuda()
-        dones = T.tensor(done).cuda()
-        actions = T.tensor(action).cuda()
-        states_ = T.tensor(new_state).cuda()
-
+        states = torch.tensor(state, dtype=torch.float32).cuda()
+        rewards = torch.tensor(reward, dtype=torch.float32).cuda()
+        dones = torch.tensor(done, dtype=torch.long).cuda()
+        actions = torch.tensor(action, dtype=torch.long).cuda()
+        states_ = torch.tensor(new_state, dtype=torch.float32).cuda()
         indices = np.arange(self.batch_size)
 
         V_s, A_s = self.q_eval.forward(states)
         V_s_, A_s_ = self.q_next.forward(states_)
-
         V_s_eval, A_s_eval = self.q_eval.forward(states_)
-
-        q_pred = T.add(V_s,
-                        (A_s - A_s.mean(dim=1, keepdim=True)))[indices, actions]
-        q_next = T.add(V_s_,
-                      (A_s_ - A_s_.mean(dim=1, keepdim=True)))
-
-        q_eval = T.add(V_s_eval, (A_s_eval - A_s_eval.mean(dim=1,keepdim=True)))
-
-        max_actions = T.argmax(q_eval, dim=1)
-
+        q_pred = torch.add(V_s, (A_s - A_s.mean(dim=1, keepdim=True)))[indices, actions]
+        q_next = torch.add(V_s_, (A_s_ - A_s_.mean(dim=1, keepdim=True)))
+        q_eval = torch.add(V_s_eval, (A_s_eval - A_s_eval.mean(dim=1, keepdim=True)))
+        max_actions = torch.argmax(q_eval, dim=1)
         q_next[dones] = 0.0
-        q_target = rewards + self.gamma*q_next[indices, max_actions]
 
-        loss = self.q_eval.loss(q_target, q_pred).cuda()
+        q_target = rewards + self.gamma * q_next[indices, max_actions]
+        loss = self.q_eval.loss(q_pred, q_target).cuda()
         loss.backward()
         self.q_eval.optimizer.step()
         self.learn_step_counter += 1
+        self.decrement_epsilon()
 
+    def save_models(self):
+        torch.save(self.q_eval.state_dict(), "q_eval.pth")
+        torch.save(self.q_next.state_dict(), "q_next.pth")
+
+    def load_models(self):
+        self.q_eval.load_state_dict(torch.load("q_eval.pth"))
+        self.q_next.load_state_dict(torch.load("q_next.pth"))
         self.decrement_epsilon()
 
 
 env = gym.make('LunarLander-v2')
 num_games = 250
-
-agent = Agent(gamma=0.99, epsilon=1.0, lr=5e-4,
-              input_dims=8, n_actions=4, mem_size=100000, eps_min=0.01,
-              batch_size=64, eps_dec=1e-3, replace=100)
-
+agent = Agent(8, 4)
 scores = []
-eps_history = []
-n_steps = 0
 
-for i in range(num_games):
+for episode in range(num_games):
     done = False
-    observation = env.reset()
+    state = env.reset()
     score = 0
-
     while not done:
-        action = agent.choose_action(observation)
-        observation_, reward, done, info = env.step(action)
+        action = agent.choose_action(state)
+        next_state, reward, done, info = env.step(action)
         score += reward
-        agent.store_transition(observation, action,
-                                reward, observation_, int(done))
+        agent.store_transition(state, action, reward, next_state, done)
         agent.learn()
-
-        observation = observation_
-
+        state = next_state
     scores.append(score)
-    avg_score = np.mean(scores[max(0, i-100):(i+1)])
-    print('episode: ', i,'score %.1f ' % score,
-         ' average score %.1f' % avg_score,
-        'epsilon %.2f' % agent.epsilon)
+    avg_score = np.mean(scores)
+    print(f"[Episode {episode}], Score {score}, Avg. Score {np.mean(scores)}, Epsilon {agent.epsilon}")
