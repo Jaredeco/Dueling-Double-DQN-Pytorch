@@ -120,6 +120,7 @@ for episode in range(num_games):
         score += reward
         agent.store_transition(state, action, reward, next_state, done)
         agent.learn()
+        agent.replace_target_network()
         state = next_state
     scores.append(score)
     avg_score = np.mean(scores)
