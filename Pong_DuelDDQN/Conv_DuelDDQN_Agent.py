@@ -54,7 +54,7 @@ class Agent:
     def choose_action(self, observation):
         if np.random.random() > self.epsilon:
             state = torch.tensor([observation], dtype=torch.float).cuda()
-            _, advantage = self.q_eval.forward(state)
+            _, advantage = self.q_eval(state)
             action = torch.argmax(advantage).item()
         else:
             action = np.random.choice(self.action_space)
@@ -88,9 +88,9 @@ class Agent:
         states_ = torch.tensor(new_state, dtype=torch.float32).cuda()
         indices = np.arange(self.batch_size)
 
-        V_s, A_s = self.q_eval.forward(states)
-        V_s_, A_s_ = self.q_next.forward(states_)
-        V_s_eval, A_s_eval = self.q_eval.forward(states_)
+        V_s, A_s = self.q_eval(states)
+        V_s_, A_s_ = self.q_next(states_)
+        V_s_eval, A_s_eval = self.q_eval(states_)
         q_pred = torch.add(V_s, (A_s - A_s.mean(dim=1, keepdim=True)))[indices, actions]
         q_next = torch.add(V_s_, (A_s_ - A_s_.mean(dim=1, keepdim=True)))
         q_eval = torch.add(V_s_eval, (A_s_eval - A_s_eval.mean(dim=1, keepdim=True)))
